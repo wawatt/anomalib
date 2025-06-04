@@ -16,7 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Update import location for `get_exportable_transform` from `anomalib.utils.transform` to `anomalib.pre_processing.utils.transform`. This update aligns with the reorganization of the `anomalib` project in `v2.0.0`, and the previous path no longer exists.
+- 🔨Fix semgrep security issue for `get_datamodule()` method in https://github.com/open-edge-platform/anomalib/pull/2736
+- 🔨Update doc for `get_exportable_transform()` method in https://github.com/open-edge-platform/anomalib/pull/2731
 
 ### Deprecated
 
