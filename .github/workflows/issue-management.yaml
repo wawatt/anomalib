@@ -1,6 +1,7 @@
 name: Issue Management
 
 on:
+  workflow_dispatch:
   schedule:
     # Run daily at 5:00 UTC
     - cron: "0 5 * * *"
