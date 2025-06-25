@@ -304,10 +304,7 @@ class AnomalibCLI:
             self.config_init = self.parser.instantiate_classes(self.config)
             self.datamodule = self._get(self.config_init, "data")
             if isinstance(self.datamodule, Dataset):
-                # Let PyTorch handle pin_memory automatically
-                # This ensures optimal behavior for both CPU and GPU users
-                # nosemgrep: trailofbits.python.automatic-memory-pinning.automatic-memory-pinning  # noqa: ERA001
-                self.datamodule = DataLoader(self.datamodule, collate_fn=self.datamodule.collate_fn)
+                self.datamodule = DataLoader(self.datamodule, collate_fn=self.datamodule.collate_fn, pin_memory=True)
             self.model = self._get(self.config_init, "model")
             self._configure_optimizers_method_to_model()
             self.instantiate_engine()
@@ -345,7 +342,7 @@ class AnomalibCLI:
                 trainer_config[key] = []
             elif not isinstance(trainer_config[key], list):
                 trainer_config[key] = [trainer_config[key]]
-            if not trainer_config.get("fast_dev_run", False):
+            if not trainer_config.get("fast_dev_run"):
                 config_callback = SaveConfigCallback(
                     self._parser(self.subcommand),
                     self.config.get(str(self.subcommand), self.config),
