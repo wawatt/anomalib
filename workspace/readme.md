@@ -1,3 +1,12 @@
+# install
+```shell
+python -m venv venv
+venv/Scripts/activate.bat
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install -e ".[dev]"
+```
+
+
 ```shell
 anomalib train --config examples/configs/model/efficient_ad.yaml
 ```

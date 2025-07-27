@@ -87,7 +87,7 @@ if __name__ == '__main__':
         ),
     ]
     
-    engine = Engine(max_epochs=10,callbacks=callbacks) # logger
+    engine = Engine(max_epochs=1,callbacks=callbacks) # logger
 
     # Train the model
     engine.train(datamodule=datamodule, model=model)
