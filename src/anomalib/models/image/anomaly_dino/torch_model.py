@@ -19,6 +19,8 @@ Example:
     ... )
 """
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import torch
@@ -31,6 +33,8 @@ from anomalib.models.components import DynamicBufferMixin, KCenterGreedy
 from anomalib.models.components.dinov2 import DinoV2Loader
 from anomalib.models.image.patchcore.anomaly_map import AnomalyMapGenerator
 
+from .lightly_train import LightlyTrainECViTFeatureExtractor
+
 
 class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
     """AnomalyDINO base PyTorch model for patch-based anomaly detection.
@@ -42,8 +46,12 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
     Args:
         num_neighbours (int, optional): Number of nearest neighbors used for
             anomaly scoring. Defaults to ``1``.
-        encoder_name (str, optional): DINOv2 encoder architecture name.
-            Must start with ``"dinov2"``. Defaults to ``"dinov2_vit_small_14"``.
+        encoder_name (str, optional): DINOv2 or LightlyTrain EdgeCrafter ECViT
+            encoder name. ECViT options are ``edgecrafter/ecvitt``,
+            ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
+            ``edgecrafter/ecvitsplus``. Defaults to ``"dinov2_vit_small_14"``.
+        encoder_weights (str | Path | None, optional): Path to a LightlyTrain
+            lightweight ECViT model export. Defaults to ``None``.
         masking (bool, optional): Whether to apply PCA-based masking to suppress
             background features. Defaults to ``False``.
         coreset_subsampling (bool, optional): Whether to apply greedy coreset
@@ -63,6 +71,7 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
         self,
         num_neighbours: int = 1,
         encoder_name: str = "dinov2_vit_small_14",
+        encoder_weights: str | Path | None = None,
         masking: bool = False,
         coreset_subsampling: bool = False,
         sampling_ratio: float = 0.1,
@@ -70,15 +79,26 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
         super().__init__()
         self.num_neighbours = num_neighbours
         self.encoder_name = encoder_name
+        self.encoder_weights = encoder_weights
         self.masking = masking
         self.coreset_subsampling = coreset_subsampling
         self.sampling_ratio = sampling_ratio
 
-        # Load DINOv2 backbone
-        if not encoder_name.startswith("dinov2"):
-            err_str = f"Encoder name must start with 'dinov2', got '{encoder_name}'"
+        # Load DINOv2 or LightlyTrain EdgeCrafter ECViT backbone.
+        if encoder_name.startswith("dinov2"):
+            if encoder_weights is not None:
+                err_str = "encoder_weights is only supported for EdgeCrafter ECViT encoders."
+                raise ValueError(err_str)
+            self.feature_encoder = DinoV2Loader.from_name(self.encoder_name)
+        elif encoder_name.startswith("edgecrafter/"):
+            self.feature_encoder = LightlyTrainECViTFeatureExtractor(
+                model_name=self.encoder_name,
+                weights_path=encoder_weights,
+            )
+        else:
+            err_str = f"Encoder name must start with 'dinov2' or 'edgecrafter/', got '{encoder_name}'"
             raise ValueError(err_str)
-        self.feature_encoder = DinoV2Loader.from_name(self.encoder_name)
+        self.feature_encoder.requires_grad_(requires_grad=False)
         self.feature_encoder.eval()
 
         # Memory bank and embedding storage
@@ -124,6 +144,7 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             where ``N`` is the number of patches and ``D`` the feature dimension.
         """
         with torch.inference_mode():
+            self.feature_encoder.eval()
             return self.feature_encoder.get_intermediate_layers(image_tensor, n=1)[0]
 
     @staticmethod

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 from _pytest.monkeypatch import MonkeyPatch
+from torch import nn
 
 from anomalib.models.image.anomaly_dino.torch_model import AnomalyDINOModel
 
@@ -24,8 +25,39 @@ class TestAnomalyDINOModel:
     @staticmethod
     def test_invalid_encoder_name_raises() -> None:
         """Test that invalid encoder names raise an error."""
-        with pytest.raises(ValueError, match="Encoder name must start with 'dinov2', got 'resnet50'"):
+        with pytest.raises(ValueError, match="Encoder name must start with 'dinov2' or 'edgecrafter/'"):
             _ = AnomalyDINOModel(encoder_name="resnet50")
+
+    @staticmethod
+    def test_lightly_train_ecvit_initialization(monkeypatch: MonkeyPatch) -> None:
+        """Test that EdgeCrafter model names use the LightlyTrain feature extractor."""
+
+        class FakeECViTFeatureExtractor(nn.Module):
+            """Minimal ECViT extractor used to avoid the optional test dependency."""
+
+            patch_size = 16
+
+            def __init__(self, model_name: str, weights_path: str | None) -> None:
+                super().__init__()
+                self.model_name = model_name
+                self.weights_path = weights_path
+
+            @staticmethod
+            def get_intermediate_layers(input_tensor: torch.Tensor, n: int) -> tuple[torch.Tensor]:
+                return (torch.zeros(input_tensor.shape[0], 4, 8),) * n
+
+        monkeypatch.setattr(
+            "anomalib.models.image.anomaly_dino.torch_model.LightlyTrainECViTFeatureExtractor",
+            FakeECViTFeatureExtractor,
+        )
+        model = AnomalyDINOModel(
+            encoder_name="edgecrafter/ecvits",
+            encoder_weights="exported_last.pt",
+        )
+
+        assert model.feature_encoder.model_name == "edgecrafter/ecvits"
+        assert model.feature_encoder.weights_path == "exported_last.pt"
+        assert model.feature_encoder.patch_size == 16
 
     @staticmethod
     def test_fit_raises_without_embeddings() -> None:

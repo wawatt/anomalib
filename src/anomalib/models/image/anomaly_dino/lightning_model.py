@@ -45,6 +45,7 @@ Example:
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -82,8 +83,12 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
     Args:
         num_neighbours (int, optional): Number of nearest neighbors to use for
             anomaly scoring. Defaults to ``1``.
-        encoder_name (str, optional): Name of the pretrained DINO encoder to use.
-            Defaults to ``"dinov2_vits14"``.
+        encoder_name (str, optional): Name of the pretrained DINOv2 or LightlyTrain
+            ECViT encoder to use. ECViT options are ``edgecrafter/ecvitt``,
+            ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
+            ``edgecrafter/ecvitsplus``. Defaults to ``"dinov2_vit_small_14"``.
+        encoder_weights (str | Path | None, optional): Path to a LightlyTrain
+            lightweight ECViT model export. Defaults to ``None``.
         masking (bool, optional): Whether to apply masking during feature extraction
             to simulate occlusions or missing patches. Defaults to ``False``.
         coreset_subsampling (bool, optional): Whether to apply coreset subsampling
@@ -151,6 +156,7 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
         self,
         num_neighbours: int = 1,
         encoder_name: str = "dinov2_vit_small_14",
+        encoder_weights: str | Path | None = None,
         masking: bool = False,
         coreset_subsampling: bool = False,
         sampling_ratio: float = 0.1,
@@ -169,6 +175,7 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
         self.model: AnomalyDINOModel = AnomalyDINOModel(
             num_neighbours=num_neighbours,
             encoder_name=encoder_name,
+            encoder_weights=encoder_weights,
             masking=masking,
             coreset_subsampling=coreset_subsampling,
             sampling_ratio=sampling_ratio,

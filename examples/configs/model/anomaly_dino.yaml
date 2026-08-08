@@ -3,5 +3,6 @@ model:
   init_args:
     num_neighbours: 1
     encoder_name: dinov2_vit_small_14
+    encoder_weights: null
     masking: False
     coreset_subsampling: False
