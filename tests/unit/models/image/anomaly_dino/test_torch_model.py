@@ -19,13 +19,13 @@ class TestAnomalyDINOModel:
     def test_initialization_defaults() -> None:
         """Test initialization with default arguments."""
         model = AnomalyDINOModel()
-        assert model.encoder_name.startswith("dinov2")
+        assert "dinov2" in model.encoder_name
         assert model.memory_bank.numel() == 0
 
     @staticmethod
     def test_invalid_encoder_name_raises() -> None:
         """Test that invalid encoder names raise an error."""
-        with pytest.raises(ValueError, match="Encoder name must start with 'dinov2' or 'edgecrafter/'"):
+        with pytest.raises(ValueError, match="Encoder name must contain 'dino' or start with 'edgecrafter/'"):
             _ = AnomalyDINOModel(encoder_name="resnet50")
 
     @staticmethod

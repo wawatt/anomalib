@@ -12,7 +12,7 @@ Example:
     >>> from anomalib.models.image.anomaly_dino.torch_model import AnomalyDINOModel
     >>> model = AnomalyDINOModel(
     ...     num_neighbours=1,
-    ...     encoder_name="dinov2_vit_small_14",
+    ...     encoder_name="vit_small_patch14_dinov2",
     ...     masking=False,
     ...     coreset_subsampling=False,
     ...     sampling_ratio=0.1,
@@ -30,10 +30,14 @@ from torch.nn import functional as F  # noqa: N812
 
 from anomalib.data import InferenceBatch
 from anomalib.models.components import DynamicBufferMixin, KCenterGreedy
-from anomalib.models.components.dinov2 import DinoV2Loader
+from anomalib.models.components.feature_extractors import TimmFeatureExtractor
 from anomalib.models.image.patchcore.anomaly_map import AnomalyMapGenerator
 
 from .lightly_train import LightlyTrainECViTFeatureExtractor
+
+# Number of transformer blocks per DINOv2 ViT architecture, used to select the
+# final block for feature extraction.
+DINO_DEPTHS = {"small": 12, "base": 12, "large": 24, "huge": 32, "giant": 40}
 
 
 class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
@@ -46,10 +50,10 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
     Args:
         num_neighbours (int, optional): Number of nearest neighbors used for
             anomaly scoring. Defaults to ``1``.
-        encoder_name (str, optional): DINOv2 or LightlyTrain EdgeCrafter ECViT
+        encoder_name (str, optional): DINO or LightlyTrain EdgeCrafter ECViT
             encoder name. ECViT options are ``edgecrafter/ecvitt``,
             ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
-            ``edgecrafter/ecvitsplus``. Defaults to ``"dinov2_vit_small_14"``.
+            ``edgecrafter/ecvitsplus``. Defaults to ``"vit_small_patch14_dinov2"``.
         encoder_weights (str | Path | None, optional): Path to a LightlyTrain
             lightweight ECViT model export. Defaults to ``None``.
         masking (bool, optional): Whether to apply PCA-based masking to suppress
@@ -70,7 +74,7 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
     def __init__(
         self,
         num_neighbours: int = 1,
-        encoder_name: str = "dinov2_vit_small_14",
+        encoder_name: str = "vit_small_patch14_dinov2",
         encoder_weights: str | Path | None = None,
         masking: bool = False,
         coreset_subsampling: bool = False,
@@ -84,22 +88,35 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
         self.coreset_subsampling = coreset_subsampling
         self.sampling_ratio = sampling_ratio
 
-        # Load DINOv2 or LightlyTrain EdgeCrafter ECViT backbone.
-        if encoder_name.startswith("dinov2"):
-            if encoder_weights is not None:
-                err_str = "encoder_weights is only supported for EdgeCrafter ECViT encoders."
-                raise ValueError(err_str)
-            self.feature_encoder = DinoV2Loader.from_name(self.encoder_name)
-        elif encoder_name.startswith("edgecrafter/"):
+        # Load DINO backbone via timm or LightlyTrain EdgeCrafter ECViT backbone.
+        if encoder_name.startswith("edgecrafter/"):
             self.feature_encoder = LightlyTrainECViTFeatureExtractor(
                 model_name=self.encoder_name,
                 weights_path=encoder_weights,
             )
+            self.feature_encoder.requires_grad_(requires_grad=False)
+            self.feature_encoder.eval()
+            self.patch_size = self.feature_encoder.patch_size
         else:
-            err_str = f"Encoder name must start with 'dinov2' or 'edgecrafter/', got '{encoder_name}'"
-            raise ValueError(err_str)
-        self.feature_encoder.requires_grad_(requires_grad=False)
-        self.feature_encoder.eval()
+            if encoder_weights is not None:
+                err_str = "encoder_weights is only supported for EdgeCrafter ECViT encoders."
+                raise ValueError(err_str)
+            if "dino" not in encoder_name:
+                err_str = f"Encoder name must contain 'dino' or start with 'edgecrafter/', got '{encoder_name}'"
+                raise ValueError(err_str)
+            last_block = self._last_block_index(encoder_name)
+            self.last_layer = f"blocks.{last_block}"
+            self.feature_encoder = TimmFeatureExtractor(
+                backbone=encoder_name,
+                layers=[self.last_layer],
+                pre_trained=True,
+                requires_grad=False,
+                output_fmt="NLC",
+                return_class_token=False,
+                norm=True,
+                dynamic_img_size=True,
+            )
+            self.patch_size = self.feature_encoder.patch_size
 
         # Memory bank and embedding storage
         self.register_buffer("memory_bank", torch.empty(0))
@@ -131,6 +148,25 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             sampler = KCenterGreedy(embedding=self.memory_bank, sampling_ratio=self.sampling_ratio)
             self.memory_bank = sampler.sample_coreset()
 
+    @staticmethod
+    def _last_block_index(encoder_name: str) -> int:
+        """Return the index of the final transformer block for a DINOv2 ViT.
+
+        Args:
+            encoder_name (str): timm DINO model name (e.g. ``"vit_small_patch14_dinov2"``).
+
+        Returns:
+            int: Index of the last transformer block (``depth - 1``).
+
+        Raises:
+            ValueError: If the architecture size cannot be inferred from the name.
+        """
+        for arch, depth in DINO_DEPTHS.items():
+            if arch in encoder_name:
+                return depth - 1
+        msg = f"Could not infer architecture from '{encoder_name}'. Expected one of {list(DINO_DEPTHS)}."
+        raise ValueError(msg)
+
     def extract_features(self, image_tensor: torch.Tensor) -> torch.Tensor:
         """Extract patch-level feature embeddings from the last transformer layer.
 
@@ -143,9 +179,11 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             torch.Tensor: Patch feature embeddings of shape ``(B, N, D)``,
             where ``N`` is the number of patches and ``D`` the feature dimension.
         """
-        with torch.inference_mode():
-            self.feature_encoder.eval()
-            return self.feature_encoder.get_intermediate_layers(image_tensor, n=1)[0]
+        if self.encoder_name.startswith("edgecrafter/"):
+            with torch.inference_mode():
+                self.feature_encoder.eval()
+                return self.feature_encoder.get_intermediate_layers(image_tensor, n=1)[0]
+        return self.feature_encoder(image_tensor)[self.last_layer]
 
     @staticmethod
     def compute_background_masks(
@@ -246,7 +284,7 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
 
         # work out sizing
         b, _, h, w = input_tensor.shape
-        patch_size = self.feature_encoder.patch_size
+        patch_size = self.patch_size
 
         # Center crop input to dimensions divisible by patch size
         # This avoids introducing artificial content while maintaining spatial alignment

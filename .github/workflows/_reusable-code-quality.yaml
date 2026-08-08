@@ -56,17 +56,23 @@ on:
         type: string
         default: "3.10"
 
-permissions:
-  contents: read
+permissions: {} # No permissions by default on workflow level
 
 jobs:
   prek:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read # Required to checkout the repository
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Harden the runner (audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           lfs: true
           persist-credentials: false
-      - uses: j178/prek-action@0bb87d7f00b0c99306c8bcb8b8beba1eb581c037 # v1
+      - uses: j178/prek-action@e98a699c41eb69ab013a45817a0406469a748f8d # v2

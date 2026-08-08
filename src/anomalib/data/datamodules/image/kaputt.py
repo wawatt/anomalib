@@ -56,13 +56,13 @@ Reference:
 
 import logging
 from pathlib import Path
-from typing import Literal
 
 from torchvision.transforms.v2 import Transform
 
 from anomalib.data.datamodules.base.image import AnomalibDataModule
-from anomalib.data.datasets.image.kaputt import KaputtDataset
+from anomalib.data.datasets.image.kaputt import ImageMode, ImageType, KaputtDataset
 from anomalib.data.utils import Split, TestSplitMode, ValSplitMode
+from anomalib.utils.path import resolve_dataset_root
 
 logger = logging.getLogger(__name__)
 
@@ -71,19 +71,20 @@ class Kaputt(AnomalibDataModule):
     """Kaputt Datamodule.
 
     Args:
-        root (Path | str): Path to the root of the dataset.
+        root (Path | str | None): Path to the root of the dataset.
             Defaults to ``"./datasets/kaputt"``.
+        category (str | None): Category of the dataset (maps to ``item_material``).
+            Defaults to ``"book_other"``. Pass ``None`` to load all categories.
         train_batch_size (int, optional): Training batch size.
             Defaults to ``32``.
         eval_batch_size (int, optional): Test batch size.
             Defaults to ``32``.
         num_workers (int, optional): Number of workers.
             Defaults to ``8``.
-        image_type (str): Type of images to use - "image" for full images or
-            "crop" for cropped item regions. Defaults to ``"image"``.
-        use_reference (bool): If True, include reference (defect-free) images
-            in addition to query images. Reference images are always labeled
-            as normal. Defaults to ``False``.
+        image_type (ImageType | str): Type of images to use.
+            Defaults to ``ImageType.IMAGE``.
+        image_mode (ImageMode | str): Controls which image sources are used for
+            training. Defaults to ``ImageMode.QUERY_ONLY``.
         train_augmentations (Transform | None): Augmentations to apply to the training images.
             Defaults to ``None``.
         val_augmentations (Transform | None): Augmentations to apply to the validation images.
@@ -117,11 +118,15 @@ class Kaputt(AnomalibDataModule):
 
         Use cropped images instead of full images::
 
-            >>> datamodule = Kaputt(image_type="crop")
+            >>> datamodule = Kaputt(image_type=ImageType.CROP)
 
         Include reference (defect-free) images in training::
 
-            >>> datamodule = Kaputt(use_reference=True)
+            >>> datamodule = Kaputt(image_mode=ImageMode.QUERY_AND_REFERENCE)
+
+        Use only reference images for training (no query images)::
+
+            >>> datamodule = Kaputt(image_mode=ImageMode.REFERENCE_ONLY)
 
         Create validation set from test data (instead of using native val split)::
 
@@ -138,12 +143,13 @@ class Kaputt(AnomalibDataModule):
 
     def __init__(
         self,
-        root: Path | str = "./datasets/kaputt",
+        root: Path | str | None = "./datasets/kaputt",
+        category: str | None = "book_other",
         train_batch_size: int = 32,
         eval_batch_size: int = 32,
         num_workers: int = 8,
-        image_type: Literal["image", "crop"] = "image",
-        use_reference: bool = False,
+        image_type: ImageType | str = ImageType.IMAGE,
+        image_mode: ImageMode | str = ImageMode.QUERY_ONLY,
         train_augmentations: Transform | None = None,
         val_augmentations: Transform | None = None,
         test_augmentations: Transform | None = None,
@@ -169,9 +175,11 @@ class Kaputt(AnomalibDataModule):
             seed=seed,
         )
 
+        root = resolve_dataset_root(root, "kaputt")
         self.root = Path(root)
-        self.image_type = image_type
-        self.use_reference = use_reference
+        self._category = category or ""
+        self.image_type = ImageType(image_type)
+        self.image_mode = ImageMode(image_mode)
 
     def _setup(self, _stage: str | None = None) -> None:
         """Set up the datasets and perform dynamic subset splitting.
@@ -185,14 +193,16 @@ class Kaputt(AnomalibDataModule):
         self.train_data = KaputtDataset(
             split=Split.TRAIN,
             root=self.root,
+            category=self.category,
             image_type=self.image_type,
-            use_reference=self.use_reference,
+            image_mode=self.image_mode,
         )
         self.test_data = KaputtDataset(
             split=Split.TEST,
             root=self.root,
+            category=self.category,
             image_type=self.image_type,
-            use_reference=False,  # Don't use reference for test
+            image_mode=ImageMode.QUERY_ONLY,
         )
 
         # Kaputt has a native validation split
@@ -200,8 +210,9 @@ class Kaputt(AnomalibDataModule):
             self.val_data = KaputtDataset(
                 split=Split.VAL,
                 root=self.root,
+                category=self.category,
                 image_type=self.image_type,
-                use_reference=False,  # Don't use reference for validation
+                image_mode=ImageMode.QUERY_ONLY,
             )
 
     def prepare_data(self) -> None:

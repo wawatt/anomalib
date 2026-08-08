@@ -14,12 +14,11 @@ from typing import TYPE_CHECKING
 from settings import get_settings
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from anomalib.deploy import ExportType
 
     from pydantic_models.model import ExportParameters
     from settings import Settings
+    from utils.short_uuid import ShortUUID
 
 settings: Settings = get_settings()
 
@@ -33,9 +32,27 @@ class FileType(StrEnum):
 
 
 class BinaryRepository(metaclass=abc.ABCMeta):
-    def __init__(self, project_id: str | UUID, file_type: FileType):
+    def __init__(self, project_id: str | ShortUUID, file_type: FileType):
         self.project_id = str(project_id)
         self.file_type = file_type
+
+    def _assert_within_project(self, full_path: str) -> None:
+        """
+        Assert that a resolved path is contained within the project folder.
+
+        Args:
+            full_path (str): Absolute, already-resolved filesystem path to check.
+
+        Raises:
+            ValueError: If the path escapes the project directory.
+        """
+        project_root = os.path.realpath(self.project_folder_path)
+        try:
+            common = os.path.commonpath([project_root, full_path])
+        except ValueError as exc:
+            raise ValueError("Invalid filename: path traversal detected") from exc
+        if common != project_root:
+            raise ValueError("Invalid filename: path traversal detected")
 
     async def read_file(self, filename: str) -> bytes:
         """
@@ -49,7 +66,8 @@ class BinaryRepository(metaclass=abc.ABCMeta):
         """
 
         def stdlib_read():
-            full_path = self.get_full_path(filename)
+            full_path = os.path.realpath(self.get_full_path(filename))
+            self._assert_within_project(full_path)
             if not os.path.isfile(full_path):
                 raise FileNotFoundError(f"File not found: {full_path}")
             with open(full_path, "rb") as fp:
@@ -89,9 +107,9 @@ class BinaryRepository(metaclass=abc.ABCMeta):
         """
 
         def stdlib_write():
-            full_path = self.get_full_path(filename)
-            folder, _ = full_path.split(filename)
-            os.makedirs(folder, exist_ok=True)
+            full_path = os.path.realpath(self.get_full_path(filename))
+            self._assert_within_project(full_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "wb") as f:
                 f.write(content)
             return full_path
@@ -111,7 +129,8 @@ class BinaryRepository(metaclass=abc.ABCMeta):
         """
 
         def stdlib_delete():
-            full_path = self.get_full_path(filename)
+            full_path = os.path.realpath(self.get_full_path(filename))
+            self._assert_within_project(full_path)
             if os.path.isfile(full_path):
                 os.remove(full_path)
             else:
@@ -132,13 +151,13 @@ class BinaryRepository(metaclass=abc.ABCMeta):
 
 
 class DatasetSnapshotBinaryRepository(BinaryRepository):
-    def __init__(self, project_id: str | UUID):
+    def __init__(self, project_id: str | ShortUUID):
         super().__init__(project_id=project_id, file_type=FileType.SNAPSHOTS)
 
     def get_full_path(self, filename: str) -> str:
         return os.path.join(self.project_folder_path, filename)
 
-    def get_snapshot_path(self, snapshot_id: str | UUID) -> str:
+    def get_snapshot_path(self, snapshot_id: str | ShortUUID) -> str:
         """
         Get the full path for a dataset snapshot.
 
@@ -152,7 +171,7 @@ class DatasetSnapshotBinaryRepository(BinaryRepository):
 
 
 class ImageBinaryRepository(BinaryRepository):
-    def __init__(self, project_id: str | UUID):
+    def __init__(self, project_id: str | ShortUUID):
         super().__init__(project_id=project_id, file_type=FileType.IMAGES)
 
     def get_full_path(self, filename: str) -> str:
@@ -167,7 +186,7 @@ class VideoBinaryRepository(BinaryRepository):
     absolute path on the filesystem.
     """
 
-    def __init__(self, project_id: str | UUID):
+    def __init__(self, project_id: str | ShortUUID):
         super().__init__(project_id=project_id, file_type=FileType.VIDEOS)
 
     def get_full_path(self, filename: str) -> str:
@@ -175,7 +194,7 @@ class VideoBinaryRepository(BinaryRepository):
 
 
 class ModelBinaryRepository(BinaryRepository):
-    def __init__(self, project_id: str | UUID, model_id: str | UUID):
+    def __init__(self, project_id: str | ShortUUID, model_id: str | ShortUUID):
         super().__init__(project_id=project_id, file_type=FileType.MODELS)
         self._model_id = str(model_id)
 
@@ -221,7 +240,7 @@ class ModelBinaryRepository(BinaryRepository):
 
 
 class ModelExportBinaryRepository(BinaryRepository):
-    def __init__(self, project_id: str | UUID, model_id: str | UUID):
+    def __init__(self, project_id: str | ShortUUID, model_id: str | ShortUUID):
         super().__init__(project_id=project_id, file_type=FileType.MODEL_EXPORTS)
         self._model_id = str(model_id)
 

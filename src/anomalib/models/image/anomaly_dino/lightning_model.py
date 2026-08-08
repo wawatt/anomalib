@@ -32,7 +32,7 @@ Example:
     ...     # Initialize model
     ...     model = AnomalyDINO(
     ...         num_neighbours=1,
-    ...         encoder_name="dinov2_vit_small_14",
+    ...         encoder_name="vit_small_patch14_dinov2",
     ...         masking=mask,
     ...         coreset_subsampling=False,
     ...     )
@@ -57,6 +57,7 @@ from anomalib import LearningType, PrecisionType
 from anomalib.data import Batch
 from anomalib.metrics import Evaluator
 from anomalib.models.components import AnomalibModule, MemoryBankMixin
+from anomalib.models.components.base import restore_frozen_encoder_weights
 from anomalib.post_processing import PostProcessor
 from anomalib.pre_processing import PreProcessor
 from anomalib.visualization import Visualizer
@@ -81,12 +82,10 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
        to identify anomalies based on distance metrics.
 
     Args:
-        num_neighbours (int, optional): Number of nearest neighbors to use for
-            anomaly scoring. Defaults to ``1``.
-        encoder_name (str, optional): Name of the pretrained DINOv2 or LightlyTrain
+        encoder_name (str, optional): Name of the pretrained DINO or LightlyTrain
             ECViT encoder to use. ECViT options are ``edgecrafter/ecvitt``,
             ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
-            ``edgecrafter/ecvitsplus``. Defaults to ``"dinov2_vit_small_14"``.
+            ``edgecrafter/ecvitsplus``. Defaults to ``"vit_small_patch14_dinov2"``.
         encoder_weights (str | Path | None, optional): Path to a LightlyTrain
             lightweight ECViT model export. Defaults to ``None``.
         masking (bool, optional): Whether to apply masking during feature extraction
@@ -128,7 +127,7 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
         ...     # Initialize model
         ...     model = AnomalyDINO(
         ...         num_neighbours=1,
-        ...         encoder_name="dinov2_vit_small_14",
+        ...         encoder_name="vit_small_patch14_dinov2",
         ...         masking=mask,
         ...         coreset_subsampling=False,
         ...     )
@@ -155,7 +154,7 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
     def __init__(
         self,
         num_neighbours: int = 1,
-        encoder_name: str = "dinov2_vit_small_14",
+        encoder_name: str = "vit_small_patch14_dinov2",
         encoder_weights: str | Path | None = None,
         masking: bool = False,
         coreset_subsampling: bool = False,
@@ -194,6 +193,20 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
                 f"Supported types are: {PrecisionType.FLOAT16}, {PrecisionType.FLOAT32}."
             )
             raise ValueError(msg)
+
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        """Make checkpoints trained before the timm-encoder migration loadable.
+
+        The frozen DINOv2 encoder was migrated from a custom Vision Transformer to a frozen
+        :class:`TimmFeatureExtractor`. The legacy encoder weights are dropped and replaced by the
+        current timm encoder weights so the strict state-dict load still succeeds; the stored
+        memory bank and other non-encoder state are left untouched. See
+        :func:`~anomalib.models.components.base.restore_frozen_encoder_weights`.
+
+        Args:
+            checkpoint (dict[str, Any]): The checkpoint dictionary being loaded, modified in place.
+        """
+        restore_frozen_encoder_weights(self, checkpoint, encoder_key="feature_encoder")
 
     @classmethod
     def configure_pre_processor(
