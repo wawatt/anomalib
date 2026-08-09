@@ -3,6 +3,8 @@
 
 """Unit tests for the AnomalyDINO torch model."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -58,6 +60,66 @@ class TestAnomalyDINOModel:
         assert model.feature_encoder.model_name == "edgecrafter/ecvits"
         assert model.feature_encoder.weights_path == "exported_last.pt"
         assert model.feature_encoder.patch_size == 16
+
+    @staticmethod
+    @pytest.mark.parametrize("official_dinov2_format", [False, True])
+    def test_loads_local_dino_weights(
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+        official_dinov2_format: bool,
+    ) -> None:
+        """Test loading timm-native and official DINOv2 local state dictionaries."""
+
+        class FakeBackbone(nn.Module):
+            """Minimal timm DINO backbone with register and position parameters."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.reg_token = nn.Parameter(torch.zeros(1, 4, 8))
+                self.pos_embed = nn.Parameter(torch.zeros(1, 4, 8))
+
+        class FakeTimmFeatureExtractor(nn.Module):
+            """Minimal extractor exposing the underlying timm backbone."""
+
+            patch_size = 14
+
+            def __init__(self, *_args: object, pre_trained: bool, **_kwargs: object) -> None:
+                super().__init__()
+                self.pre_trained = pre_trained
+                self.feature_extractor = FakeBackbone()
+
+        weights_path = tmp_path / ("dinov2.pth" if official_dinov2_format else "dinov2.safetensors")
+        weights_path.write_bytes(b"placeholder")
+        pos_embed = torch.full((1, 4, 8), 2.0)
+        if official_dinov2_format:
+            state_dict = {
+                "register_tokens": torch.ones(1, 4, 8),
+                "mask_token": torch.zeros(1, 8),
+                "pos_embed": torch.cat((torch.zeros(1, 1, 8), pos_embed), dim=1),
+            }
+        else:
+            state_dict = {
+                "reg_token": torch.ones(1, 4, 8),
+                "pos_embed": pos_embed,
+            }
+
+        monkeypatch.setattr(
+            "anomalib.models.image.anomaly_dino.torch_model.TimmFeatureExtractor",
+            FakeTimmFeatureExtractor,
+        )
+        monkeypatch.setattr(
+            "anomalib.models.image.anomaly_dino.torch_model.load_timm_state_dict",
+            lambda *_args, **_kwargs: state_dict,
+        )
+
+        model = AnomalyDINOModel(
+            encoder_name="vit_small_patch14_reg4_dinov2",
+            encoder_weights=weights_path,
+        )
+
+        assert model.feature_encoder.pre_trained is False
+        assert torch.all(model.feature_encoder.feature_extractor.reg_token == 1)
+        assert torch.all(model.feature_encoder.feature_extractor.pos_embed == 2)
 
     @staticmethod
     def test_fit_raises_without_embeddings() -> None:

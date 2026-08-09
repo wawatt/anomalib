@@ -86,8 +86,10 @@ class AnomalyDINO(MemoryBankMixin, AnomalibModule):
             ECViT encoder to use. ECViT options are ``edgecrafter/ecvitt``,
             ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
             ``edgecrafter/ecvitsplus``. Defaults to ``"vit_small_patch14_dinov2"``.
-        encoder_weights (str | Path | None, optional): Path to a LightlyTrain
-            lightweight ECViT model export. Defaults to ``None``.
+        encoder_weights (str | Path | None, optional): Path to local encoder
+            weights. DINO encoders accept timm-native checkpoints and official
+            DINOv2 state dictionaries. ECViT encoders accept LightlyTrain
+            lightweight exports. Defaults to ``None``.
         masking (bool, optional): Whether to apply masking during feature extraction
             to simulate occlusions or missing patches. Defaults to ``False``.
         coreset_subsampling (bool, optional): Whether to apply coreset subsampling

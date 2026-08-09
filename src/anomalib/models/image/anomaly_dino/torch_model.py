@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 import torch
 from sklearn.decomposition import PCA
+from timm.models import load_state_dict as load_timm_state_dict
 from torch import nn
 from torch.nn import functional as F  # noqa: N812
 
@@ -54,8 +55,11 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             encoder name. ECViT options are ``edgecrafter/ecvitt``,
             ``edgecrafter/ecvittplus``, ``edgecrafter/ecvits``, and
             ``edgecrafter/ecvitsplus``. Defaults to ``"vit_small_patch14_dinov2"``.
-        encoder_weights (str | Path | None, optional): Path to a LightlyTrain
-            lightweight ECViT model export. Defaults to ``None``.
+        encoder_weights (str | Path | None, optional): Path to local encoder
+            weights. DINO encoders accept timm-native checkpoints, including
+            ``.safetensors``, and official DINOv2 ``.pth`` state dictionaries.
+            ECViT encoders accept LightlyTrain lightweight exports. When omitted,
+            the encoder's default pretrained weights are loaded. Defaults to ``None``.
         masking (bool, optional): Whether to apply PCA-based masking to suppress
             background features. Defaults to ``False``.
         coreset_subsampling (bool, optional): Whether to apply greedy coreset
@@ -98,9 +102,6 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             self.feature_encoder.eval()
             self.patch_size = self.feature_encoder.patch_size
         else:
-            if encoder_weights is not None:
-                err_str = "encoder_weights is only supported for EdgeCrafter ECViT encoders."
-                raise ValueError(err_str)
             if "dino" not in encoder_name:
                 err_str = f"Encoder name must contain 'dino' or start with 'edgecrafter/', got '{encoder_name}'"
                 raise ValueError(err_str)
@@ -109,13 +110,15 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
             self.feature_encoder = TimmFeatureExtractor(
                 backbone=encoder_name,
                 layers=[self.last_layer],
-                pre_trained=True,
+                pre_trained=encoder_weights is None,
                 requires_grad=False,
                 output_fmt="NLC",
                 return_class_token=False,
                 norm=True,
                 dynamic_img_size=True,
             )
+            if encoder_weights is not None:
+                self._load_dino_weights(encoder_weights)
             self.patch_size = self.feature_encoder.patch_size
 
         # Memory bank and embedding storage
@@ -124,6 +127,54 @@ class AnomalyDINOModel(DynamicBufferMixin, nn.Module):
 
         # Anomaly map generator for visualization and scoring
         self.anomaly_map_generator = AnomalyMapGenerator()
+
+    def _load_dino_weights(self, weights_path: str | Path) -> None:
+        """Load local timm or official DINOv2 weights into the frozen encoder.
+
+        Official Meta DINOv2 checkpoints use ``register_tokens`` and include a
+        training-only ``mask_token`` plus a CLS position in ``pos_embed``. timm
+        stores the equivalent values as ``reg_token``, omits ``mask_token``, and
+        keeps only patch positions in ``pos_embed``. The conversion is applied
+        only when these legacy fields or shapes are detected.
+
+        Args:
+            weights_path: Local ``.safetensors``, ``.pth``, or ``.pt`` file.
+
+        Raises:
+            FileNotFoundError: If ``weights_path`` does not exist.
+            RuntimeError: If the converted state dictionary does not strictly
+                match the selected timm encoder architecture.
+        """
+        weights_path = Path(weights_path)
+        if not weights_path.is_file():
+            msg = f"DINO encoder weights file does not exist: {weights_path}"
+            raise FileNotFoundError(msg)
+
+        state_dict = dict(
+            load_timm_state_dict(
+                str(weights_path),
+                use_ema=False,
+                device="cpu",
+                weights_only=True,
+            ),
+        )
+        if "register_tokens" in state_dict:
+            state_dict["reg_token"] = state_dict.pop("register_tokens")
+        state_dict.pop("mask_token", None)
+
+        feature_extractor = self.feature_encoder.feature_extractor
+        checkpoint_pos_embed = state_dict.get("pos_embed")
+        model_pos_embed = getattr(feature_extractor, "pos_embed", None)
+        if (
+            isinstance(checkpoint_pos_embed, torch.Tensor)
+            and isinstance(model_pos_embed, torch.Tensor)
+            and checkpoint_pos_embed.ndim == model_pos_embed.ndim
+            and checkpoint_pos_embed.shape[1] == model_pos_embed.shape[1] + 1
+            and checkpoint_pos_embed.shape[2:] == model_pos_embed.shape[2:]
+        ):
+            state_dict["pos_embed"] = checkpoint_pos_embed[:, 1:]
+
+        feature_extractor.load_state_dict(state_dict, strict=True)
 
     def fit(self) -> None:
         """Finalize and optionally subsample the memory bank after training.
